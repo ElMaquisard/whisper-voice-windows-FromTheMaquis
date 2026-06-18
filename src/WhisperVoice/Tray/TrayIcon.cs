@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using WhisperVoice.Config;
 using WhisperVoice.Logging;
 
 namespace WhisperVoice.Tray;
@@ -20,6 +21,7 @@ public class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _toggleMenuItem;
     private readonly ToolStripMenuItem _pttMenuItem;
     private readonly ToolStripMenuItem _modeMenuItem;
+    private readonly ToolStripMenuItem _actionMenuItem;
     private string _toggleShortcut;
     private string _pttKey;
     private string _currentMode;
@@ -32,8 +34,15 @@ public class TrayIcon : IDisposable
 
     public event Action? QuitRequested;
     public event Action? PreferencesRequested;
+    public event Action<string>? PostActionSelected;
 
-    public TrayIcon(string toggleShortcut, string pttKey, string currentMode = "Brut", bool hasAIModes = false)
+    public TrayIcon(
+        string toggleShortcut,
+        string pttKey,
+        string currentMode = "Brut",
+        bool hasAIModes = false,
+        IEnumerable<PostActionConfig>? postActions = null,
+        string? activePostActionId = null)
     {
         _toggleShortcut = toggleShortcut;
         _pttKey = pttKey;
@@ -59,10 +68,14 @@ public class TrayIcon : IDisposable
 
         // AI Mode indicator
         var modeText = hasAIModes
-            ? $"Mode: {_currentMode} (Shift to switch)"
+            ? $"Mode: {_currentMode} (Tab to switch)"
             : $"Mode: {_currentMode} (add OpenAI key for AI modes)";
         _modeMenuItem = new ToolStripMenuItem(modeText) { Enabled = false };
         contextMenu.Items.Add(_modeMenuItem);
+
+        _actionMenuItem = new ToolStripMenuItem("Action");
+        contextMenu.Items.Add(_actionMenuItem);
+        UpdatePostActions(postActions ?? PostActionConfig.CreateDefaults(), activePostActionId ?? PostActionConfig.BuiltInPasteId);
 
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add("Preferences...", null, (_, _) => PreferencesRequested?.Invoke());
@@ -87,7 +100,33 @@ public class TrayIcon : IDisposable
     public void UpdateModeLabel(string modeName)
     {
         _currentMode = modeName;
-        _modeMenuItem.Text = $"Mode: {modeName} (Shift to switch)";
+        _modeMenuItem.Text = $"Mode: {modeName} (Tab to switch)";
+    }
+
+    public void UpdatePostActions(IEnumerable<PostActionConfig> actions, string activePostActionId)
+    {
+        var merged = PostActionConfig.MergeWithBuiltIns(actions);
+        var active = PostActionConfig.Resolve(merged, activePostActionId);
+
+        _actionMenuItem.Text = $"Action: {active.Label}";
+        _actionMenuItem.DropDownItems.Clear();
+
+        foreach (var action in merged)
+        {
+            var item = new ToolStripMenuItem(action.Label)
+            {
+                Checked = string.Equals(action.Id, active.Id, StringComparison.OrdinalIgnoreCase),
+                Tag = action.Id
+            };
+            item.Click += (_, _) =>
+            {
+                if (item.Tag is string actionId)
+                {
+                    PostActionSelected?.Invoke(actionId);
+                }
+            };
+            _actionMenuItem.DropDownItems.Add(item);
+        }
     }
 
     public void SetState(AppState state)
